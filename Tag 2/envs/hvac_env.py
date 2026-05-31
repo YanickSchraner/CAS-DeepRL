@@ -29,9 +29,17 @@ class HvacEnv(gym.Env):
         3 → Heater HIGH   (3.0 kW)
 
     Reward per step (15 min):
-        -(discomfort_penalty + electricity_cost)
+        -(discomfort_penalty + cost_weight * electricity_cost)
         discomfort_penalty = |room_temp - 21°C| * discomfort_weight
         electricity_cost   = heater_power_kW * price_€/kWh * 0.25 h
+
+    The raw per-step electricity cost (a few cents) is tiny next to the
+    discomfort penalty, so without scaling the agent has almost no incentive
+    to shift heating into cheap hours. `cost_weight` (default 10) lifts the
+    cost term into the same order of magnitude as discomfort, making
+    DeepMind-style load-shifting (pre-heat when cheap, coast through the price
+    peak) a behaviour worth learning. `info["cost_eur"]` always reports the
+    *raw* monetary cost in euros, regardless of `cost_weight`.
     """
 
     metadata = {"render_modes": ["human"]}
@@ -45,9 +53,11 @@ class HvacEnv(gym.Env):
     _C = 10.0   # kWh / °C — building thermal mass
     _DT = 0.25  # hours    — step duration
 
-    def __init__(self, discomfort_weight: float = 2.0, episode_days: int = 1, seed: int = None):
+    def __init__(self, discomfort_weight: float = 2.0, cost_weight: float = 10.0,
+                 episode_days: int = 1, seed: int = None):
         super().__init__()
         self.discomfort_weight = discomfort_weight
+        self.cost_weight = cost_weight
         self.episode_length = episode_days * self.STEPS_PER_DAY
         self._rng = np.random.default_rng(seed)
 
@@ -101,7 +111,7 @@ class HvacEnv(gym.Env):
 
         discomfort = abs(self._room_temp - self.TARGET_TEMP) * self.discomfort_weight
         cost = power * price * self._DT
-        reward = float(-(discomfort + cost))
+        reward = float(-(discomfort + self.cost_weight * cost))
 
         self._room_temp = float(np.clip(self._thermal_step(self._room_temp, t_out, power), 10.0, 35.0))
         self._step += 1
