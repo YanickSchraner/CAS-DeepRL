@@ -29,10 +29,16 @@ class PricingEnv(gym.Env):
         2 → PREMIUM  — 130 % of base price
         3 → LUXURY   — 170 % of base price
 
+    Demand elasticity is regime-dependent: weekday shoppers are very
+    price-sensitive (elasticity ≈ -2.2), weekend shoppers far less so
+    (≈ -0.7). This makes the profit-maximising price swing with the day of
+    week, so no single fixed price is optimal and a state-aware policy has
+    real headroom over the fixed baselines.
+
     Reward per day:
         revenue - stockout_penalty - holding_cost
         revenue          = units_sold × price
-        stockout_penalty = unmet_demand × BASE_PRICE × 0.5
+        stockout_penalty = unmet_demand × BASE_PRICE × 0.25
         holding_cost     = inventory × 0.5 €/unit/day
     """
 
@@ -61,16 +67,22 @@ class PricingEnv(gym.Env):
     def _demand(self, price: float, competitor_price: float, day_of_week: int) -> float:
         """
         Stochastic demand with price elasticity, competitor effect, and weekday pattern.
-        Elasticity -1.5 means a 10 % price increase → 15 % demand drop.
+
+        Elasticity is regime-dependent: weekdays are highly elastic (-2.2, bargain
+        hunters), weekends are nearly inelastic (-0.7, leisure buyers who will pay
+        a premium). This is what makes the optimal price swing by day of week, so a
+        state-aware policy can beat any single fixed price.
         """
-        elasticity = -1.5
+        elasticity = -0.7 if day_of_week >= 5 else -2.2
         price_ratio = price / self.BASE_PRICE
-        comp_effect = 0.2 * (competitor_price - price) / self.BASE_PRICE
-        weekend_boost = 1.3 if day_of_week >= 5 else 1.0
+        comp_effect = 0.35 * (competitor_price - price) / self.BASE_PRICE
+        weekend_boost = 1.5 if day_of_week >= 5 else 1.0
 
         mean = self.MAX_DAILY_DEMAND * (price_ratio ** elasticity) * weekend_boost * (1.0 + comp_effect)
         mean = float(np.clip(mean, 0.0, self.MAX_DAILY_DEMAND * 3))
-        return max(0.0, float(self._rng.normal(mean, mean * 0.2 + 1e-6)))
+        # Lower observation noise (10% vs 20%) raises the signal-to-noise ratio so
+        # the state-dependent pricing strategy is actually learnable.
+        return max(0.0, float(self._rng.normal(mean, mean * 0.10 + 1e-6)))
 
     # ------------------------------------------------------------------
     # Gymnasium API
@@ -97,14 +109,16 @@ class PricingEnv(gym.Env):
         unmet = max(0.0, demand - self._inventory)
 
         revenue = units_sold * price
-        stockout_penalty = unmet * self.BASE_PRICE * 0.5
+        stockout_penalty = unmet * self.BASE_PRICE * 0.25
         holding_cost = self._inventory * 0.5
         reward = float(revenue - stockout_penalty - holding_cost)
 
-        # Update inventory (simple restock when running low)
+        # Update inventory (simple restock when running low). The restock is
+        # deliberately modest so that pricing too cheap genuinely risks a stockout
+        # — this is what makes inventory-aware pricing pay off.
         self._inventory = max(0, self._inventory - units_sold)
         if self._inventory < 20:
-            self._inventory = min(self._inventory + int(self._rng.integers(15, 35)), self.MAX_INVENTORY)
+            self._inventory = min(self._inventory + int(self._rng.integers(10, 25)), self.MAX_INVENTORY)
 
         # Competitor price random walk ±5 % per day
         self._competitor_price *= float(self._rng.uniform(0.95, 1.05))
