@@ -49,8 +49,15 @@ class HvacEnv(gym.Env):
     STEPS_PER_DAY = 96                        # 24h × 4 steps/h (15-min steps)
 
     # Thermal model constants
-    _R = 5.0    # °C / kW  — building thermal resistance
-    _C = 10.0   # kWh / °C — building thermal mass
+    # Chosen so that 21°C is actually reachable: holding the target needs
+    # ~2.1 kW at a typical outdoor temp (well within the 3.0 kW HIGH setting),
+    # leaving headroom to pre-heat. The time constant R*C = 16 h means heating
+    # meaningfully changes the room temperature within a single 24 h episode,
+    # so the agent gets a usable learning signal. (Earlier values R=5, C=10
+    # made the building too leaky — holding 21°C needed 3.3 kW > the 3.0 kW max
+    # — and too sluggish, R*C = 50 h.)
+    _R = 8.0    # °C / kW  — building thermal resistance (insulation)
+    _C = 2.0    # kWh / °C — building thermal mass
     _DT = 0.25  # hours    — step duration
 
     def __init__(self, discomfort_weight: float = 2.0, cost_weight: float = 10.0,
